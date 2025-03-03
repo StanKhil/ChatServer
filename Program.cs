@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 class Server
 {
     private static Dictionary<string, TcpClient> clients = new Dictionary<string, TcpClient>();
+    private static List<string> connectedUsers = new List<string>();
     private static TcpListener listener;
 
     static async Task Main()
@@ -24,6 +25,59 @@ class Server
         }
     }
 
+    /*private static async Task AddUser(string login)
+    {
+        connectedUsers.Add(login);
+        foreach (var client in clients)
+        {
+            NetworkStream stream = client.Value.GetStream();
+            await stream.WriteAsync(Encoding.UTF8.GetBytes($"ADD:{login.Trim()}"));
+            await stream.FlushAsync();
+        }
+    }
+
+
+    private static async Task RemoveUser(string login)
+    {
+        connectedUsers.Remove(login);
+        foreach (var client in clients)
+        {
+            NetworkStream stream = client.Value.GetStream();
+            await stream.WriteAsync(Encoding.UTF8.GetBytes($"REMOVE:{login.Trim()}"));
+            await stream.FlushAsync();
+        }
+    }*/
+
+
+
+
+    private static async Task Broadcast(string message)
+    {
+        byte[] data = Encoding.UTF8.GetBytes(message + "\n");
+        Console.WriteLine($"[SERVER] Отправлено сообщение: {message}");
+        List<string> disconnectedUsers = new List<string>();
+
+        foreach (var user in clients)
+        {
+            try
+            {
+                NetworkStream stream = user.Value.GetStream();
+                await stream.WriteAsync(data, 0, data.Length);
+                await stream.FlushAsync();
+            }
+            catch
+            {
+                disconnectedUsers.Add(user.Key);
+            }
+        }
+
+        foreach (string user in disconnectedUsers)
+        {
+            clients.Remove(user);
+            Console.WriteLine($"Отключен: {user}");
+        }
+    }
+
     private static async Task HandleClientAsync(TcpClient client)
     {
         NetworkStream stream = client.GetStream();
@@ -31,18 +85,21 @@ class Server
         int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
         string login = Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim();
 
-        if (!clients.ContainsKey(login))
+        if (string.IsNullOrWhiteSpace(login) || clients.ContainsKey(login))
         {
-            clients.Add(login, client);
-            Console.WriteLine($"{login} подключился.");
-            await stream.WriteAsync(Encoding.UTF8.GetBytes("OK"));
-        }
-        else
-        {
-            await stream.WriteAsync(Encoding.UTF8.GetBytes("ERROR"));
+            await stream.WriteAsync(Encoding.UTF8.GetBytes("ERROR\n"));
             client.Close();
             return;
         }
+
+        clients[login] = client;
+        Console.WriteLine($"{login} подключился.");
+        await stream.WriteAsync(Encoding.UTF8.GetBytes("OK\n"));
+        await stream.FlushAsync();
+
+        string userList = string.Join(",", clients.Keys);
+        await Broadcast($"USERS:{userList}");
+        await Broadcast($"ADD:{login}");
 
         try
         {
@@ -51,10 +108,10 @@ class Server
                 bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
                 if (bytesRead == 0) break;
 
-                string message = Encoding.UTF8.GetString(buffer, 0, bytesRead);
+                string message = Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim();
                 string[] parts = message.Split(':', 2);
-                if (parts.Length < 2) continue;
 
+                if (parts.Length < 2) continue;
                 string recipient = parts[0];
                 string content = parts[1];
 
@@ -63,11 +120,12 @@ class Server
                     await ReceiveFile(stream, recipient, login, message);
                 }
                 else
-                {
+                { 
                     if (clients.ContainsKey(recipient))
                     {
                         NetworkStream recipientStream = clients[recipient].GetStream();
-                        await recipientStream.WriteAsync(Encoding.UTF8.GetBytes($"{login}: {content}"));
+                        await recipientStream.WriteAsync(Encoding.UTF8.GetBytes($"{login}: {content}\n"));
+                        await recipientStream.FlushAsync();
                     }
                 }
             }
@@ -76,6 +134,7 @@ class Server
 
         clients.Remove(login);
         Console.WriteLine($"{login} отключился.");
+        await Broadcast($"REMOVE:{login}");
         client.Close();
     }
 
@@ -115,7 +174,7 @@ class Server
                 return;
             }*/
 
-            //await stream.WriteAsync(Encoding.UTF8.GetBytes("OK\n"));
+            await stream.WriteAsync(Encoding.UTF8.GetBytes("OK\n"));
             long fileSize = long.Parse(fileSizeStr);
             string filePath = Path.Combine("ReceivedFiles", fileName);
             Directory.CreateDirectory("ReceivedFiles");
@@ -168,3 +227,4 @@ class Server
     }
 
 }
+
