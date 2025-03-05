@@ -1,16 +1,14 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using System.Threading.Tasks;
 
 class Server
 {
     private static Dictionary<string, TcpClient> clients = new Dictionary<string, TcpClient>();
     private static List<string> connectedUsers = new List<string>();
     private static TcpListener listener;
+    private static List<string> groups = new List<string>();
+    private static Dictionary<string, List<string>> usersInGroup= new Dictionary<string, List<string>>();
 
     static async Task Main()
     {
@@ -25,37 +23,11 @@ class Server
         }
     }
 
-    /*private static async Task AddUser(string login)
-    {
-        connectedUsers.Add(login);
-        foreach (var client in clients)
-        {
-            NetworkStream stream = client.Value.GetStream();
-            await stream.WriteAsync(Encoding.UTF8.GetBytes($"ADD:{login.Trim()}"));
-            await stream.FlushAsync();
-        }
-    }
-
-
-    private static async Task RemoveUser(string login)
-    {
-        connectedUsers.Remove(login);
-        foreach (var client in clients)
-        {
-            NetworkStream stream = client.Value.GetStream();
-            await stream.WriteAsync(Encoding.UTF8.GetBytes($"REMOVE:{login.Trim()}"));
-            await stream.FlushAsync();
-        }
-    }*/
-
-
-
 
     private static async Task Broadcast(string message)
     {
         byte[] data = Encoding.UTF8.GetBytes(message + "\n");
         Console.WriteLine($"[SERVER] Отправлено сообщение: {message}");
-        List<string> disconnectedUsers = new List<string>();
 
         foreach (var user in clients)
         {
@@ -65,18 +37,10 @@ class Server
                 await stream.WriteAsync(data, 0, data.Length);
                 await stream.FlushAsync();
             }
-            catch
-            {
-                disconnectedUsers.Add(user.Key);
-            }
-        }
-
-        foreach (string user in disconnectedUsers)
-        {
-            clients.Remove(user);
-            Console.WriteLine($"Отключен: {user}");
+            catch { }
         }
     }
+
 
     private static async Task HandleClientAsync(TcpClient client)
     {
@@ -97,8 +61,7 @@ class Server
         await stream.WriteAsync(Encoding.UTF8.GetBytes("OK\n"));
         await stream.FlushAsync();
 
-        string userList = string.Join(",", clients.Keys);
-        await Broadcast($"USERS:{userList}");
+        await Broadcast($"USERS:{string.Join(",", clients.Keys)}");
         await Broadcast($"ADD:{login}");
 
         try
@@ -109,24 +72,56 @@ class Server
                 if (bytesRead == 0) break;
 
                 string message = Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim();
-                string[] parts = message.Split(':', 2);
+                string[] parts = message.Split(':', 4);
 
                 if (parts.Length < 2) continue;
-                string recipient = parts[0];
-                string content = parts[1];
 
-                if (content.StartsWith("FILE:"))
+                string command = parts[0];
+                string recipient = parts[1];
+                string content = string.Join(":", parts.Skip(2));
+
+                if (command == "FILE")
                 {
-                    await ReceiveFile(stream, recipient, login, message);
+                    // Обработка файлов
+                    if (recipient == "GROUP")
+                    {
+                        string groupName = parts[2];
+                        string fileName = parts[3];
+                        string fileSize = parts.Length > 4 ? parts[4] : "0";
+                        await ReceiveFile(stream, groupName, login, message);
+                    }
+                    else
+                    {
+                        string fileName = parts[2];
+                        string fileSize = parts.Length > 3 ? parts[3] : "0";
+                        await ReceiveFile(stream, recipient, login, message);
+                    }
                 }
-                else
-                { 
-                    if (clients.ContainsKey(recipient))
+                else if (command == "MESSAGE")
+                {
+                    if (recipient == "GROUP")
+                    {
+                        string groupName = parts[2];
+                        string groupMessage = parts.Length > 3 ? parts[3] : string.Empty;
+                        await SendMessageToGroup(groupName, login, groupMessage);
+                    }
+                    else if (clients.ContainsKey(recipient))
                     {
                         NetworkStream recipientStream = clients[recipient].GetStream();
                         await recipientStream.WriteAsync(Encoding.UTF8.GetBytes($"{login}: {content}\n"));
                         await recipientStream.FlushAsync();
                     }
+                }
+                else if (command == "ADDGROUP")
+                {
+                    string groupName = parts[1];
+                    await Broadcast($"ADDGROUP:{groupName}");
+                }
+                else if (command == "UPDATEGROUP")
+                {
+                    string groupName = parts[1];
+                    string groupUsers = parts[2];
+                    await Broadcast($"UPDATEGROUP:{groupName}:{groupUsers}");
                 }
             }
         }
@@ -138,6 +133,29 @@ class Server
         client.Close();
     }
 
+
+    private static async Task SendMessageToGroup(string groupName, string sender, string message)
+    {
+        if (!usersInGroup.ContainsKey(groupName) || !usersInGroup[groupName].Contains(sender))
+        {
+            Console.WriteLine($"Ошибка: {sender} не в группе {groupName}!");
+            return;
+        }
+
+        string fullMessage = $"GROUP:{groupName}:{sender}: {message}\n";
+        byte[] data = Encoding.UTF8.GetBytes(fullMessage);
+
+        foreach (string user in usersInGroup[groupName])
+        {
+            if (clients.ContainsKey(user))
+            {
+                NetworkStream stream = clients[user].GetStream();
+                await stream.WriteAsync(data, 0, data.Length);
+                await stream.FlushAsync();
+            }
+        }
+    }
+
     private static async Task ReceiveFile(NetworkStream stream, string recipient, string sender, string message)
     {
         try
@@ -146,36 +164,25 @@ class Server
 
             Console.WriteLine($"Получен заголовок: {message}");
 
-            string[] headerParts = message.Split(':', StringSplitOptions.RemoveEmptyEntries);
-            /*if (headerParts.Length < 3 || !headerParts[1].Trim().Equals("FILE", StringComparison.OrdinalIgnoreCase))
+            string[] headerParts = message.Split(':', 5, StringSplitOptions.RemoveEmptyEntries);
+            if (headerParts.Length < 4 || !headerParts[0].Trim().Equals("FILE", StringComparison.OrdinalIgnoreCase))
             {
                 Console.WriteLine("Ошибка: некорректный заголовок файла!");
-                await stream.WriteAsync(Encoding.UTF8.GetBytes("ERROR\n"));
                 return;
-            }*/
+            }
 
-            string fileNameSize = headerParts[2].Trim();
-            int lastSpaceIndex = fileNameSize.LastIndexOf(' ');
+            string target = headerParts[1].Trim();  // Либо имя пользователя, либо "GROUP"
+            string groupName = target == "GROUP" ? headerParts[2].Trim() : "";
+            string fileName = headerParts[target == "GROUP" ? 3 : 2].Trim();
+            string fileSizeStr = headerParts[target == "GROUP" ? 4 : 3].Trim();
 
-            /*if (lastSpaceIndex == -1)
-            {
-                Console.WriteLine("Ошибка: заголовок не содержит размер файла!");
-                await stream.WriteAsync(Encoding.UTF8.GetBytes("ERROR\n"));
-                return;
-            }*/
-
-            string fileName = fileNameSize.Substring(0, lastSpaceIndex);
-            string fileSizeStr = fileNameSize.Substring(lastSpaceIndex + 1);
-
-            /*if (!long.TryParse(fileSizeStr, out long fileSize))
+            if (!long.TryParse(fileSizeStr, out long fileSize))
             {
                 Console.WriteLine($"Ошибка: неверный размер файла! File {fileName} size {fileSizeStr}");
-                await stream.WriteAsync(Encoding.UTF8.GetBytes("ERROR\n"));
                 return;
-            }*/
+            }
 
-            await stream.WriteAsync(Encoding.UTF8.GetBytes("OK\n"));
-            long fileSize = long.Parse(fileSizeStr);
+            //await stream.WriteAsync(Encoding.UTF8.GetBytes("OK\n"));
             string filePath = Path.Combine("ReceivedFiles", fileName);
             Directory.CreateDirectory("ReceivedFiles");
 
@@ -199,7 +206,30 @@ class Server
                 Console.WriteLine($"Файл {fileName} ({fileSize} байт) получен от {sender}");
             }
 
-            if (clients.ContainsKey(recipient))
+            if (target == "GROUP" && usersInGroup.ContainsKey(groupName))
+            {
+                Console.WriteLine($"Файл {fileName} предназначен для группы {groupName}");
+                foreach (string user in usersInGroup[groupName])
+                {
+                    if (clients.ContainsKey(user) && user != sender)
+                    {
+                        NetworkStream recipientStream = clients[user].GetStream();
+                        await recipientStream.WriteAsync(Encoding.UTF8.GetBytes($"GROUPFILE:{groupName}:{sender}|{fileName}\n"));
+
+                        using (FileStream sendFileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                        {
+                            int bytesRead;
+                            while ((bytesRead = await sendFileStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                            {
+                                await recipientStream.WriteAsync(buffer, 0, bytesRead);
+                            }
+                        }
+
+                        Console.WriteLine($"Файл {fileName} отправлен пользователю {user} из группы {groupName}");
+                    }
+                }
+            }
+            else if (clients.ContainsKey(recipient))
             {
                 NetworkStream recipientStream = clients[recipient].GetStream();
                 await recipientStream.WriteAsync(Encoding.UTF8.GetBytes($"FILE:{sender}|{fileName}\n"));
@@ -211,13 +241,13 @@ class Server
                     {
                         await recipientStream.WriteAsync(buffer, 0, bytesRead);
                     }
-
-                    Console.WriteLine($"Файл {fileName} отправлен пользователю {recipient}");
                 }
+
+                Console.WriteLine($"Файл {fileName} отправлен пользователю {recipient}");
             }
             else
             {
-                Console.WriteLine($"Пользователь {recipient} не в сети, файл сохранён на сервере.");
+                Console.WriteLine($"Пользователь или группа {recipient} не в сети, файл сохранён на сервере.");
             }
         }
         catch (Exception ex)
@@ -225,6 +255,8 @@ class Server
             Console.WriteLine($"Ошибка при получении файла: {ex.Message}");
         }
     }
+
+
 
 }
 
