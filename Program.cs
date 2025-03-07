@@ -1,5 +1,7 @@
-﻿using System.Net;
+﻿using System;
+using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text;
 
 class Server
@@ -85,13 +87,13 @@ class Server
                         string groupName = parts[2];
                         string fileName = parts[3];
                         string fileSize = parts.Length > 4 ? parts[4] : "0";
-                        await ReceiveFile(stream, groupName, login, message);
+                        await ReceiveFileAsync(stream, groupName, login, message);
                     }
                     else
                     {
                         string fileName = parts[2];
                         string fileSize = parts.Length > 3 ? parts[3] : "0";
-                        await ReceiveFile(stream, recipient, login, message);
+                        await ReceiveFileAsync(stream, recipient, login, message);
                     }
                 }
                 else if (command == "MESSAGE")
@@ -156,7 +158,7 @@ class Server
         }
     }
 
-    private static async Task ReceiveFile(NetworkStream stream, string recipient, string sender, string message)
+    private static async Task ReceiveFileAsync(NetworkStream stream, string recipient, string sender, string message)
     {
         try
         {
@@ -195,7 +197,19 @@ class Server
 
                 Console.WriteLine($"Файл {fileName} ({fileSize} байт) отримано від {sender}");
             }
+            await SendFileAsync(target, groupName, fileName, sender, filePath, buffer, recipient);
 
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Помилка при отримані файла: {ex.Message}");
+        }
+    }
+
+    private static async Task SendFileAsync(string target,string groupName, string fileName, string sender,string filePath, byte[] buffer,string recipient)
+    {
+        try
+        {
             if (target == "GROUP" && usersInGroup.ContainsKey(groupName))
             {
                 Console.WriteLine($"Файл {fileName} для групи {groupName}");
@@ -242,7 +256,7 @@ class Server
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Помилка при отримані файла: {ex.Message}");
+            Console.WriteLine($"Помилка при відправці файла: {ex.Message}");
         }
     }
 }
