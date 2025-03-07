@@ -14,7 +14,7 @@ class Server
     {
         listener = new TcpListener(IPAddress.Any, 5000);
         listener.Start();
-        Console.WriteLine("Сервер запущен...");
+        Console.WriteLine("Сервер увімкнений...");
 
         while (true)
         {
@@ -23,11 +23,10 @@ class Server
         }
     }
 
-
     private static async Task Broadcast(string message)
     {
         byte[] data = Encoding.UTF8.GetBytes(message + "\n");
-        Console.WriteLine($"[SERVER] Отправлено сообщение: {message}");
+        Console.WriteLine($"[SERVER] Надіслано повідомлення: {message}");
 
         foreach (var user in clients)
         {
@@ -40,7 +39,6 @@ class Server
             catch { }
         }
     }
-
 
     private static async Task HandleClientAsync(TcpClient client)
     {
@@ -57,7 +55,7 @@ class Server
         }
 
         clients[login] = client;
-        Console.WriteLine($"{login} подключился.");
+        Console.WriteLine($"{login} підключився.");
         await stream.WriteAsync(Encoding.UTF8.GetBytes("OK\n"));
         await stream.FlushAsync();
 
@@ -72,7 +70,7 @@ class Server
                 if (bytesRead == 0) break;
 
                 string message = Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim();
-                string[] parts = message.Split(':', 4);
+                string[] parts = message.Split(':', 5);
 
                 if (parts.Length < 2) continue;
 
@@ -82,7 +80,6 @@ class Server
 
                 if (command == "FILE")
                 {
-                    // Обработка файлов
                     if (recipient == "GROUP")
                     {
                         string groupName = parts[2];
@@ -102,7 +99,7 @@ class Server
                     if (recipient == "GROUP")
                     {
                         string groupName = parts[2];
-                        string groupMessage = parts.Length > 3 ? parts[3] : string.Empty;
+                        string groupMessage = parts.Length > 4 ? parts[4] : string.Empty;
                         await SendMessageToGroup(groupName, login, groupMessage);
                     }
                     else if (clients.ContainsKey(recipient))
@@ -115,12 +112,16 @@ class Server
                 else if (command == "ADDGROUP")
                 {
                     string groupName = parts[1];
+                    groups.Add(groupName);
+                    usersInGroup[groupName] = new List<string>();
+                    usersInGroup[groupName].Add(login);
                     await Broadcast($"ADDGROUP:{groupName}");
                 }
                 else if (command == "UPDATEGROUP")
                 {
                     string groupName = parts[1];
                     string groupUsers = parts[2];
+                    usersInGroup[groupName] = groupUsers.Split(',').ToList();
                     await Broadcast($"UPDATEGROUP:{groupName}:{groupUsers}");
                 }
             }
@@ -128,17 +129,16 @@ class Server
         catch { }
 
         clients.Remove(login);
-        Console.WriteLine($"{login} отключился.");
+        Console.WriteLine($"{login} відключився.");
         await Broadcast($"REMOVE:{login}");
         client.Close();
     }
-
 
     private static async Task SendMessageToGroup(string groupName, string sender, string message)
     {
         if (!usersInGroup.ContainsKey(groupName) || !usersInGroup[groupName].Contains(sender))
         {
-            Console.WriteLine($"Ошибка: {sender} не в группе {groupName}!");
+            Console.WriteLine($"Помилка: {sender} не в групі {groupName}!");
             return;
         }
 
@@ -147,7 +147,7 @@ class Server
 
         foreach (string user in usersInGroup[groupName])
         {
-            if (clients.ContainsKey(user))
+            if (clients.ContainsKey(user) && user != sender)
             {
                 NetworkStream stream = clients[user].GetStream();
                 await stream.WriteAsync(data, 0, data.Length);
@@ -161,32 +161,22 @@ class Server
         try
         {
             byte[] buffer = new byte[4096];
-
-            Console.WriteLine($"Получен заголовок: {message}");
-
             string[] headerParts = message.Split(':', 5, StringSplitOptions.RemoveEmptyEntries);
-            if (headerParts.Length < 4 || !headerParts[0].Trim().Equals("FILE", StringComparison.OrdinalIgnoreCase))
-            {
-                Console.WriteLine("Ошибка: некорректный заголовок файла!");
-                return;
-            }
-
-            string target = headerParts[1].Trim();  // Либо имя пользователя, либо "GROUP"
+            string target = headerParts[1].Trim(); 
             string groupName = target == "GROUP" ? headerParts[2].Trim() : "";
             string fileName = headerParts[target == "GROUP" ? 3 : 2].Trim();
             string fileSizeStr = headerParts[target == "GROUP" ? 4 : 3].Trim();
 
             if (!long.TryParse(fileSizeStr, out long fileSize))
             {
-                Console.WriteLine($"Ошибка: неверный размер файла! File {fileName} size {fileSizeStr}");
+                Console.WriteLine($"Помилка: неправильний розмір файла! File {fileName} size {fileSizeStr}");
                 return;
             }
 
-            //await stream.WriteAsync(Encoding.UTF8.GetBytes("OK\n"));
             string filePath = Path.Combine("ReceivedFiles", fileName);
             Directory.CreateDirectory("ReceivedFiles");
 
-            Console.WriteLine($"Начало получения файла {fileName} от {sender} (Размер: {fileSize} байт)");
+            Console.WriteLine($"Початок отримання файла {fileName} від {sender} (Розмір: {fileSize} байт)");
 
             using (FileStream fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write))
             {
@@ -200,15 +190,15 @@ class Server
                     await fileStream.WriteAsync(buffer, 0, bytesRead);
                     totalBytesRead += bytesRead;
 
-                    Console.WriteLine($"Получено {totalBytesRead}/{fileSize} байт...");
+                    Console.WriteLine($"Отримано {totalBytesRead}/{fileSize} байт...");
                 }
 
-                Console.WriteLine($"Файл {fileName} ({fileSize} байт) получен от {sender}");
+                Console.WriteLine($"Файл {fileName} ({fileSize} байт) отримано від {sender}");
             }
 
             if (target == "GROUP" && usersInGroup.ContainsKey(groupName))
             {
-                Console.WriteLine($"Файл {fileName} предназначен для группы {groupName}");
+                Console.WriteLine($"Файл {fileName} для групи {groupName}");
                 foreach (string user in usersInGroup[groupName])
                 {
                     if (clients.ContainsKey(user) && user != sender)
@@ -225,7 +215,7 @@ class Server
                             }
                         }
 
-                        Console.WriteLine($"Файл {fileName} отправлен пользователю {user} из группы {groupName}");
+                        Console.WriteLine($"Файл {fileName} надіслано користувачу {user} із групи {groupName}");
                     }
                 }
             }
@@ -243,20 +233,17 @@ class Server
                     }
                 }
 
-                Console.WriteLine($"Файл {fileName} отправлен пользователю {recipient}");
+                Console.WriteLine($"Файл {fileName} надіслано користувачу {recipient}");
             }
             else
             {
-                Console.WriteLine($"Пользователь или группа {recipient} не в сети, файл сохранён на сервере.");
+                Console.WriteLine($"{recipient} не в мережі, файл збережено на сервері.");
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Ошибка при получении файла: {ex.Message}");
+            Console.WriteLine($"Помилка при отримані файла: {ex.Message}");
         }
     }
-
-
-
 }
 
